@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/">
+    <link rel="stylesheet" href="/groupify.css"> 
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "axios": "https://cdn.skypack.dev/axios"
+        }
+    }
+    </script>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/n3/browser/n3.min.js"></script>
+    <!-- PrimeVUE -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://unpkg.com/primevue/umd/primevue.min.js"></script>
+    <script src="https://unpkg.com/@primeuix/themes/umd/aura.js"></script>
+
+    <!-- <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.10.2/Sortable.min.js"></script> -->
+    <!-- CDNJS :: Vue.Draggable (https://cdnjs.com/) -->
+    <script src="https://cdn.jsdelivr.net/npm/vue-draggable-next@2.3.0/dist/vue-draggable-next.global.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/diff@8.0.2/dist/diff.min.js"></script>
+    
+    <script type="module" src="groupify.js"></script>
+
+    <script type="module">
+        import groupify from "/groupify.js"
+
+        groupify.run()
+    </script>
+    <title>Groupify</title>
+</head>
+<body>
+    <div id="app" class="h-full p-3 grid gap-3 grid-rows-[64px_1fr] grid-cols-1 grid-flow-row">
+        <p-message v-if="errorMessage" severity="error" closeIcon="fa fa-cog">{{errorMessage}}</p-message>
+        <p-toolbar>
+            <template #start>
+                <p-button v-if="!plugins.value?.length"
+                    icon="fa fa-cog fa-lg"
+                    severity="info"
+                    rounded
+                    label="Download plugin list"
+                    @click="get_plugin_list" />
+            </template>
+            <template #center>
+                <span v-if="selected_plugin" class="text-lg font-semibold text-black">{{selected_plugin.label}}</span>
+            </template>
+            <template #end>
+                <p-button rouded icon="fa fa-key" :severity="githubSecret.secret.value ? 'info' : 'danger'" @click="change_github_secret"></p-button> 
+            </template>
+        </p-toolbar>
+
+        <p-splitter class="w-full overflow-auto">
+            <p-splitterpanel :size="20" class="flex items-center justify-center p-3">
+                <div class="w-full h-full">
+
+                    <p-listbox scrollHeight="100%"  v-model="selected_plugin" class="plugins-list" fluid :options="plugins" :optionValue="id" :optionLabel="label" filter>
+                        <template #option="slotProps"> 
+                            <div>
+                                <div  :class="slotProps.option['patch_available'] ? 'opacity-50' : ''">
+                                    <i v-if="slotProps.option['patch_available']" class="fa-solid fa-check"></i>
+                                    <i v-if="!slotProps.option['patch_available'] && slotProps.option['id'] != ':custom:'" class="fa-solid fa-wave-square"></i>
+                                    <i v-if="slotProps.option['id'] == ':custom:'" class="fa-solid fa-plus"></i>
+                                    <span class="m-3">{{ slotProps.option['label'] }}</span>
+                                </div>
+                            </div>
+                        </template>
+                    </p-listbox>
+
+                    <span class="block text-center m-1 opacity-75">{{plugins.filter(x => x.patch_available).length}} / {{plugins.length}}</span>
+                </div>
+            </p-splitterpanel>
+
+            <p-splitterpanel :size="80">
+                <div class="w-full h-full grid grid-cols-1 grid-rows-[1fr_200px] gap-2">
+                    <p-splitter class="overflow-auto">
+                        <p-splitterpanel :size="40">
+                            <!-- <span v-if="!selected_plugin && plugins.value?.length > 0" class="empty-placeholder">Select a plugin from the left list</span> -->
+                            <div class="h-full grid grid-rows-[44px_1fr] p-[8px] grid-cols-1 gap-1">
+                                <p-buttongroup class="justify-center items-center ">
+                                    <p-button icon="pi pi-check" :outlined="selected_preview == 'original'" label="Original" size="small" @click="switchPreview('original')"></p-button>
+                                    <p-button label="Patched" :outlined="selected_preview == 'patched'" size="small" @click="switchPreview('patched')"></p-button>
+                                    <p-button label="Diff" :outlined="selected_preview == 'diff'    " size="small" @click="switchPreview('diff')"></p-button>
+                                </p-buttongroup>
+                                <div class="relative overflow-auto h-full">
+                                    <div v-if="selected_plugin" class="h-full plugin-ttl-text">{{ ttl_preview }}</div>
+                                    <div class="absolute bottom-[10px] right-[10px]">
+                                        <p-button icon="fa fa-copy" severity="secondary"  rounded size="small" @click="copy_preview_ttl_to_clipboard"></p-button>
+                                    </div>
+                                </div>
+                            </div>
+                        </p-splitterpanel>
+
+                        <p-splitterpanel>
+                            <div class="w-full h-full bg-black relative">
+                                <draggable v-if="selected_plugin" class="plugin-info-preview" @end="on_port_dropped" >
+                                    <div v-for="port in ports"
+                                        class="port-control p-[12px]" :class="port.selected ? 'selected' : ''"
+                                        :style="'border-color:' + (port.group.id > -1 ? port.group.color : 'transparent') + ';'"
+                                        @click="toggle_port_selection(port.id)">
+                                            <span class="port-label">{{port.label}}</span>
+                                            <div class="port-knob" :style="'background-color:' + (port.group.id > -1 ? port.group.color : 'transparent') + ';'"></div>
+                                            <span class="port-group">{{port.group.label}}</span>
+                                    </div>
+                                </draggable>
+                                <div v-if="selected_plugin && !isCustomTtl" class="absolute bottom-[8px] right-[8px]">
+                                    <p-button label ="Send patch"
+                                        :visible="send_enabled"
+                                        rounded
+                                        severity="info"
+                                        @click="send_patch"/>
+                                </div>
+                            </div>
+                        </p-splitterpanel>
+                    </p-splitter>
+
+                    <!-- footer -->
+                    <div v-if="selected_plugin" class="flex flex-wrap flex-row gap-2 content-center max-h-full overflow-auto p-2">
+                        <div v-for="group in groups" 
+                            class="relative w-[64px] h-[64px] grow-0 shirink-0 shadow-md rounded-sm text-stone-50 p-px"
+                            :style="'background:' + group.color + ';'"
+                            @click="set_selected_port_group(group.id)">
+                            <div class="w-full h-full">
+                                {{group.label}}
+                            </div>
+                            <div class="absolute bottom-[4px] right-[4px] fa fa-pencil cursor-pointer z-1" @click.stop="show_rename_dialog(group)"></div>
+                        </div>
+                    </div>
+                </div>
+            </p-splitterpanel>
+        </p-splitter>
+
+        <p-dialog :visible="renameGroupDialog.visible.value" modal header="Rename group" :style="{ width: '35rem' }">
+            <div class="flex items-center gap-4 mb-4">
+                <label for="group-label" class="font-semibold w-24">New label</label>
+                <p-inputtext id="group-label" class="flex-auto" autocomplete="off" v-model="renameGroupDialog.label"/>
+            </div>
+            <div class="flex justify-end gap-2">
+                <p-button type="button" label="Cancel" severity="secondary" @click="renameGroupDialog.visible.value = false"></p-button>
+                <p-button type="button" label="Rename" :enabled="renameGroupDialog.group" @click="rename_group(renameGroupDialog.group, renameGroupDialog.label)"></p-button>
+            </div>
+        </p-dialog>
+
+        <p-dialog :visible="githubSecret.visible.value" modal header="Enter github secret" :style="{ width: '23rem' }">
+            <div class="flex items-center gap-4 mb-4">
+                <label for="secret" class="font-semibold w-24">Secret</label>
+                <p-password id="secret" class="flex-auto w-full" toggleMask v-model="githubSecret.currentSecret"/>
+            </div>
+            <div class="flex justify-end gap-2">
+                <p-button type="button" label="Cancel" severity="secondary" @click="githubSecret.visible.value = false"></p-button>
+                <p-button type="button" label="Ok" @click="save_github_secret(githubSecret.currentSecret)"></p-button>
+            </div>
+        </p-dialog>
+
+        <p-dialog :visible="customTtl.visible.value" class="custom-ttl-dialog " :contentStyle="{ height: '100%' }" contentClass="w-full h-full" modal header="Paste custom turtle file below" :style="{ width: '80%', 'max-width': '1024px', height: '80%', 'max-heigth': '800px' }">
+            <p-textarea id="customttl-content" class="h-full" fluid toggleMask v-model="customTtl.content"></p-textarea>
+            <template #footer>
+                    <p-button type="button" label="Cancel" severity="secondary" @click="customTtl.visible.value = false"></p-button>
+                    <p-button type="button" label="Ok" @click="save_customttl_dialog(customTtl.content)"></p-button>
+            </template>
+        </p-dialog>
+
+        <p-confirmdialog></p-confirmdialog>
+        <p-toast position="bottom-left"></p-toast>
+    </div>
+</body>
