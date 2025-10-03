@@ -1,19 +1,18 @@
 import axios from 'axios'
 
 function run() {
-    const storageKeyPlugins = 'groupify.v1.plugins';
+    const storageKeyBundles = 'groupify.v1.bundles';
     const storageKeyGitHubSecret = 'groupify.v1.githubSecret';
     
     const github_api = {
-        get_plugins: "https://api.github.com/repos/sejerpz/mod-lv2-data/git/trees/master?recursive=1", 
+        get_bundles: "https://api.github.com/repos/sejerpz/mod-lv2-data/git/trees/master?recursive=1", 
         create_issue: "https://api.github.com/repos/sejerpz/mod-lv2-data/issues",
         search_issue: "https://api.github.com/search/issues?q={title}+label:groupify+repo:sejerpz/mod-lv2-data&sort=created&order=asc"
     }
     const { createApp, ref, onMounted, watch, defineModel } = Vue
     const app = createApp({
         setup() {
-            let plugins = ref([])
-            let selected_plugin = ref(null)
+            let bundles = ref([])
             let ttl_preview = ref('')
             let selected_preview = ref('original')
             let original_ttl = ''
@@ -40,19 +39,20 @@ function run() {
                 visible: ref(false),
                 content: ref(""),
             }
+            let selected_bundle = ref(null)
 
             function toast(message, title, timeoutMs) {
                 toastService.add({summary: title, detail: message, life: timeoutMs ?? 2000})
             }
 
-            // cache plugins status to local storage
-            function cache_plugins_status() {
-                localStorage.setItem(storageKeyPlugins, JSON.stringify(plugins.value))
+            // cache bundles status to local storage
+            function cache_bundles_status() {
+                localStorage.setItem(storageKeyBundles, JSON.stringify(bundles.value))
             }
 
             function get_plugin_list() {
-                plugins.value = []
-                axios.get(github_api.get_plugins)
+                bundles.value = []
+                axios.get(github_api.get_bundles)
                 .then(res => {
                     for(const item of res.data.tree) {
                         const path = item["path"]
@@ -61,25 +61,25 @@ function run() {
                             console.log(item)
                             if (path?.endsWith('/manifest.ttl')) {
                                 const id = path.replace('/manifest.ttl', '')
-                                const parentItem = plugins.value.find(element => element.id == id)
+                                const parentItem = bundles.value.find(element => element.id == id)
                                 parentItem.manifest = item;
                             } else if (item["mode"] == '040000' && path.indexOf('/modgui') == -1 ) { // folder
                                 var label = path.replace(/^.*[\\/]/, '').replace('.lv2', '')
-                                plugins.value.push({id: path, label: label, data: item, manifest: null, ttl: null, patch_available: false})
+                                bundles.value.push({id: path, label: label, data: item, manifest: null, ttl: null, patch_available: false, plugins: []})
                             }
                         }
                     }
 
-                    plugins.value.sort((a,b) => {
+                    bundles.value.sort((a,b) => {
                         return a.label.localeCompare(b.label)
                     })
 
-                    cache_plugins_status()
+                    cache_bundles_status()
 
-                    plugins.value.splice(0, 0, {id: ':custom:', label: 'Custom file', data: null, manifest: null, ttl: null, patch_available: false})
+                    bundles.value.splice(0, 0, {id: ':custom:', label: 'Custom file', data: null, manifest: null, ttl: null, patch_available: false, plugins: []})
                 })
                 .catch(err => {
-                    console.error('error getting plugins: ', err)
+                    console.error('error getting bundles: ', err)
                 });
             }
 
@@ -92,22 +92,22 @@ function run() {
                 return (res?.data?.total_count ?? 0) > 0
             }
 
-            async function select_plugin(id) {
-                console.log('plugin selected', id)
+            async function on_selected_bundle_changed() {
+                console.log('bundle selected', selected_bundle.value?.id)
                 ttl_preview.value = original_ttl = patched_ttl = ''
                 send_enabled.value = false
-                if (selected_plugin.value) {
-                    if (selected_plugin.value.id == ':custom:') {
+                if (selected_bundle.value) {
+                    if (selected_bundle.value.id == ':custom:') {
                         customTtl.visible.value = true
                     } else {
-                        // check if the plugin is already patched
-                        if (await query_plugin_patched(selected_plugin.value)) {
-                            selected_plugin.value.patch_available = true
-                            cache_plugins_status()
+                        // check if the bundle is already patched
+                        if (await query_plugin_patched(selected_bundle.value)) {
+                            selected_bundle.value.patch_available = true
+                            cache_bundles_status()
 
                             confirmationService.require({
                                 message: 'A patch is already submitted for this plugin',
-                                header: selected_plugin.value.label,
+                                header: selected_bundle.value.label,
                                 modal: true,
                                 acceptProps: {
                                     label: 'Proceed anyway',
@@ -118,12 +118,12 @@ function run() {
                                     severity: 'secondary',
                                 },
                                 accept: () => {
-                                     download_plugin_info(selected_plugin.value)
+                                     download_bundle_info(selected_bundle.value)
                                 }
                             });
                         } else {
                             // not patch -> download
-                            download_plugin_info(selected_plugin.value)
+                            download_bundle_info(selected_bundle.value)
                         }
                     }
                 }
@@ -134,12 +134,28 @@ function run() {
 
                 // parse the ports
                 const quads = parser.parse(ttl_file)
-                let subjects = new Set()
+                let subjects = []
+                let currentPluginQuad = undefined // the bundles defined in this ttl
+
+                selected_bundle.value.plugins.splice(0) // clear the plugins defined in the bundle
+                // plugins defined
+                  // distinct subject
+                for(let quad of quads) {
+                    if (!quad.subject.id.startsWith('_') && quad.object.id.indexOf('#Plugin') >= 0) {
+                        const label =  quad.subject.id.split('/').pop() // last element
+                        selected_bundle.value.plugins.push({id: quad.subject.id, label: label, quad: quad})
+                    }
+                }
 
                 // distinct subject
                 for(let quad of quads) {
-                    if (!subjects.has(quad._subject.id))
-                        subjects.add(quad._subject.id)
+                    if (!subjects.find(s => s.id == quad.subject.id)) {
+                        console.log("found subject: ", quad.subject.id, quad)
+                        subjects.push({id: quad.subject.id, pluginId: currentPluginQuad?.subject.id ?? undefined})
+                        if (!quad.subject.id.startsWith('_')) {
+                            currentPluginQuad = quad
+                        }
+                    }
                 }
 
                 // subject that are inputports and control ports
@@ -168,19 +184,20 @@ function run() {
                 } 
 
                 let _ports = []
-                for(let id of subjects) {
-                    if (quads.find(qd => getControlPort(id, qd)) && quads.find(qd => getInputPort(id, qd))) {
-                        const label = quads.find(qd => searchPredicate(id, qd, "http://lv2plug.in/ns/lv2core#name"))
-                        const symbol = quads.find(qd => searchPredicate(id, qd, "http://lv2plug.in/ns/lv2core#symbol"))
-                        const index =  quads.find(qd => searchPredicate(id, qd, "http://lv2plug.in/ns/lv2core#index"))
+                for(let subject of subjects) {
+                    if (quads.find(qd => getControlPort(subject.id, qd)) && quads.find(qd => getInputPort(subject.id, qd))) {
+                        const label = quads.find(qd => searchPredicate(subject.id, qd, "http://lv2plug.in/ns/lv2core#name"))
+                        const symbol = quads.find(qd => searchPredicate(subject.id, qd, "http://lv2plug.in/ns/lv2core#symbol"))
+                        const index =  quads.find(qd => searchPredicate(subject.id, qd, "http://lv2plug.in/ns/lv2core#index"))
 
-                        const port = { id: id,
+                        const port = { id: subject.id,
                                         label: label?.object?.id.replace('"', '').replace('"', ''),
                                         symbol: symbol?.object.id.replace('"', '').replace('"', ''),
                                         index: parseInt(index.object.value) ?? 0,
                                         group: groups.value[0],
-                                        selected: false
-                                        }
+                                        selected: false,
+                                        pluginId: subject.pluginId
+                                    }
                         _ports.push(port)
                         //console.log('added ', port)
                     }
@@ -200,12 +217,27 @@ function run() {
                 ports.value = _ports;
             }
 
-            function download_plugin_info(plugin) {
-                console.log('download plugin info: ', plugin.id)
+            // returns a list of ports defined in the plugin with the id supplied
+            function get_plugin_ports(plugin) {
+                const pluginPorts = []
 
-                toast('Get plugin manifest from github.com', 'Download in progress')
+                if (plugin?.id && ports?.value) {
+                    for(const port of ports.value) {
+                        if (port.pluginId == plugin.id) {
+                            pluginPorts.push(port)
+                        }
+                    }
+                }
+
+                return pluginPorts
+            }
+
+            function download_bundle_info(bundle) {
+                console.log('download bundle info: ', bundle.id)
+
+                toast('Get bundle manifest from github.com', 'Download in progress')
                 // download manifest.ttl
-                axios.get(plugin.manifest.url)
+                axios.get(bundle.manifest.url)
                 .then(res => {
                     //console.log('manifest.ttl downloaded ', res)
                     // parse manifest ttl
@@ -214,7 +246,7 @@ function run() {
                     const parser = new N3.Parser()
                     const quads = parser.parse(manifest)
 
-                    // search the first quad which is a lv2:plugin and get the subject
+                    // search the first quad which is a lv2:bundle and get the subject
                     let subject = null
 
                     for(const quad of quads) {
@@ -225,39 +257,40 @@ function run() {
                     }
 
                     // search the first quad seeAlso for the subject and get the plugin ttl
-                    let pluginTtl = null
+                    let bundleTtl = null
                     if (subject) {
                         for(const quad of quads) {
                             if (quad._object.id == "modgui.ttl" || quad._object.id == "modguis.ttl")
                                 continue; // skip know ttl
 
                             if (quad._subject.id == subject && quad._predicate.id.endsWith("#seeAlso")) {
-                                pluginTtl = quad._object.id
+                                bundleTtl = quad._object.id
                                 // cleanup
 
                             }
                         }
                     }
-                    // download plugin ttl
-                    if (pluginTtl) {
-                        console.log('downloading ', plugin, pluginTtl)
+                    // download bundle ttl
+                    if (bundleTtl) {
+                        console.log('downloading ', bundle, bundleTtl)
                         // get the folder list
 
                         ttl_preview.value = original_ttl = patched_ttl = ''
                         send_enabled.value = false
                         isCustomTtl.value = false
+                        bundle.plugins.splice(0)
                         ports.value = []
 
-                        axios.get(plugin.data.url)
+                        axios.get(bundle.data.url)
                         .then(res => {
                             if (res?.data?.tree) {
                                 for(var item of res.data.tree) {
                                     //console.log(item)
-                                    if (item.path == pluginTtl) {
+                                    if (item.path == bundleTtl) {
                                         // found the ttl
                                         axios.get(item.url)
                                         .then(res => {
-                                            plugin.ttl = item
+                                            bundle.ttl = item
                                             ttl_preview.value = original_ttl = patched_ttl = atob(res.data.content)
                                             parse_ports_ttl(original_ttl)
                                         })
@@ -275,7 +308,7 @@ function run() {
                     }
                 })
                 .catch(err => {
-                    console.error('error getting plugins: ', err)
+                    console.error('error getting bundle: ', err)
                 })
             }
 
@@ -327,20 +360,20 @@ function run() {
             
             function getDiff() {
                 let name1, name2;
-                if (selected_plugin.value.id == ':custom:')
+                if (selected_bundle.value.id == ':custom:')
                 {
                     name1 = 'a/custom'+ '/plugin.ttl'
                     name2 = 'b/custom'+ '/plugin.ttl'
                 }
-                else if (selected_plugin.value.ttl)
+                else if (selected_bundle.value.ttl)
                 {
-                    name1 = 'a/' + selected_plugin.value.data.path + '/' + selected_plugin.value.ttl.path
-                    name2 = 'b/' + selected_plugin.value.data.path + '/' + selected_plugin.value.ttl.path
+                    name1 = 'a/' + selected_bundle.value.data.path + '/' + selected_bundle.value.ttl.path
+                    name2 = 'b/' + selected_bundle.value.data.path + '/' + selected_bundle.value.ttl.path
                 }
-                else if (selected_plugin.value.data)
+                else if (selected_bundle.value.data)
                 {
-                    name1 = 'a/' + selected_plugin.value.data.path + '/plugin.ttl'
-                    name2 = 'b/' + selected_plugin.value.data.path + '/plugin.ttl'
+                    name1 = 'a/' + selected_bundle.value.data.path + '/plugin.ttl'
+                    name2 = 'b/' + selected_bundle.value.data.path + '/plugin.ttl'
                 }
                 else
                 {
@@ -600,10 +633,10 @@ function run() {
                 }
 
                 errorMessage.value = ""
-                let body = '```path: ' + selected_plugin.value.data.path + '```\n```\n' + Diff.createTwoFilesPatch("original", "new", original_ttl, patched_ttl) + '```\n'
+                let body = '```path: ' + selected_bundle.value.data.path + '```\n```\n' + Diff.createTwoFilesPatch("original", "new", original_ttl, patched_ttl) + '```\n'
 
                 const issue = {
-                    "title": 'Groups for: ' + selected_plugin.value.label,
+                    "title": 'Groups for: ' + selected_bundle.value.label,
                     "body": body,
                     "labels": ['patch', 'groupify']
                 }
@@ -620,9 +653,9 @@ function run() {
                 .then(function (response) {
                     //handle success
                     console.log(response);
-                    selected_plugin.value.patch_available = true
-                    cache_plugins_status()
-                    selected_plugin.value = undefined
+                    selected_bundle.value.patch_available = true
+                    cache_bundles_status()
+                    selected_bundle.value = undefined
                     toast('Post to github.com issue', 'Sending patch')
                 })
                 .catch(function (response) {
@@ -637,21 +670,21 @@ function run() {
                 let items = null
 
                 try {
-                    items = JSON.parse(localStorage.getItem(storageKeyPlugins));
+                    items = JSON.parse(localStorage.getItem(storageKeyBundles));
                 } catch(err) {
                     console.error('error reading local storage: ', err)
-                    localStorage.setItem(storageKeyPlugins, null)
+                    localStorage.setItem(storageKeyBundles, null)
                     items = null
                 }
 
                 if (items && items.length > 0) {
-                    console.log("plugins found in localstorage #", items.length)
+                    console.log("bundles found in localstorage #", items.length)
                     if (items[0].id == ':custom:') // remove saved custom
                         items.splice(0, 1)
 
                     // readd custom item
                     items.splice(0, 0, {id: ':custom:', label: 'Custom file', data: null, manifest: null, ttl: null, patch_available: false})
-                    plugins.value = items
+                    bundles.value = items
                 }
 
                 try {
@@ -663,9 +696,9 @@ function run() {
                 }
             })
 
-            watch(selected_plugin, (old, newValue) => {
+            watch(selected_bundle, (old, newValue) => {
                 console.log('selected plugin ', newValue)
-                select_plugin (newValue?.id)
+                on_selected_bundle_changed ()
             })
             // initalize groups
             groups.value.push({id: -1, label: 'none', name: '<#none#>', color: "white", color: 'var(--no-group-color)'})
@@ -691,8 +724,8 @@ function run() {
                 groups.value.push({id: i, label: def.label, name: 'GROUP_' +  def.name, color: `var(--group-${i}-color)`})
             }
             return {
-                selected_plugin,
-                plugins,
+                selected_bundle,
+                bundles,
                 err,
                 ttl_preview,
                 selected_preview,
@@ -707,7 +740,6 @@ function run() {
                 toggle_port_selection,
                 set_selected_port_group,
                 get_plugin_list,
-                select_plugin,
                 on_port_dropped,
                 patch,
                 switchPreview,
@@ -717,7 +749,8 @@ function run() {
                 change_github_secret,
                 save_github_secret,
                 save_customttl_dialog,
-                copy_preview_ttl_to_clipboard
+                copy_preview_ttl_to_clipboard,
+                get_plugin_ports
             }
         }
     })

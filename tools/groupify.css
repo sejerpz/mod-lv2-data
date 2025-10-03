@@ -46,30 +46,6 @@ body {
     height: calc(100% - 20px);
 }
 
-/*
-.plugin-list {
-    height: 100%;
-    overflow: auto;
-    grid-row: 2;
-    grid-column: 1;
-}
-
-.plugin-list > ul {
-    list-style-type: none;
-    padding-left: 0; 
-}
-
-.plugin-list > ul > li {
-    height: 28px;
-    padding: 8px;
-    cursor: pointer;
-}
-
-.plugin-item.selected {
-    background-color: cornflowerblue;
-    color: whitesmoke;
-}
-*/
 
 .plugin-info {
     grid-column: 2;
