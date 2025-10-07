@@ -139,7 +139,6 @@ function run() {
 
                 selected_bundle.value.plugins.splice(0) // clear the plugins defined in the bundle
                 // plugins defined
-                  // distinct subject
                 for(let quad of quads) {
                     if (!quad.subject.id.startsWith('_') && quad.object.id.indexOf('#Plugin') >= 0) {
                         const label =  quad.subject.id.split('/').pop() // last element
@@ -430,7 +429,7 @@ function run() {
                         // fix the index
                         lines[indexLineIndex] = updateLineValue(lines, indexLineIndex, 'index', port.index)
                     } else {
-                        lines.splice(symbolLineIndex, 0, indentation + symbolPrefix + ':index ' + port.index.toString() + ';')
+                        lines.splice(symbolLineIndex, 0, indentation + symbolPrefix + ':index ' + port.index.toString() + ' ;')
                     }
                     if (group.id == -1) {
                         // remove group
@@ -447,118 +446,138 @@ function run() {
                     }
                 }
 
-                let port = undefined
-                let indexLineIndex = -1
-                let symbolLineIndex = -1
-                let symbolPrefix = ""
-                let symbolIndentation = '    '
-                let groupLineIndex = -1
-                let lastPrefixIndex = -1
-                let pluginId = null
-                const usedGroupsId = []
+                let lastPrefixIndex = -1 // last line with @prefix
 
-                for(port of ports.value) {
-                    let insidePort = 0
+                // get the list of plugins
+                for(const plugin of selected_bundle.value.plugins) {
+                    let port = undefined
+                    let indexLineIndex = -1
+                    let symbolLineIndex = -1
+                    let lastPluginLineIndex = -1
+                    let symbolPrefix = ""
+                    let symbolIndentation = '    '
+                    let groupLineIndex = -1
+                    let pluginId = null
+                    const usedGroupsId = []
+                    const pluginPorts = get_plugin_ports(plugin)
+                    
+                    for(port of pluginPorts) {
+                        let insidePort = 0
 
-                    indexLineIndex = -1
-                    symbolLineIndex = -1
-                    symbolPrefix = ""
-                    symbolIndentation = '    '
-                    groupLineIndex = -1
-                    lastPrefixIndex = -1
+                        indexLineIndex = -1
+                        symbolLineIndex = -1
+                        symbolPrefix = ""
+                        symbolIndentation = '    '
+                        groupLineIndex = -1
+                        lastPrefixIndex = -1
 
-                    if (port.group.id >= 0 && !usedGroupsId.includes(port.group.id))
-                        usedGroupsId.push(port.group.id)
+                        if (port.group.id >= 0 && !usedGroupsId.includes(port.group.id))
+                            usedGroupsId.push(port.group.id)
 
-                    for(let index = 0;index < lines.length; index++) {
-                        const line = lines[index]
+                        for(let index = 0; index < lines.length; index++) {
+                            const line = lines[index]
 
-                        // search the plugin id (can't be on the first row)
-                        if (pluginId == null && index > 0 && line.indexOf(':Plugin') >= 0)
-                            pluginId = lines[index-1]
-                        if (lastPrefixIndex == -1 && line.indexOf('@prefix ') >= 0)
-                            lastPrefixIndex = index
-
-                        if (line.indexOf(':port') >= 0) {
-                            // ok new port found, add the config to the previous
-                            if (symbolLineIndex >= 0) {
-                                patchPort({
-                                    port: port,
-                                    lines: lines,
-                                    indexLineIndex: indexLineIndex,
-                                    groupLineIndex: groupLineIndex,
-                                    symbolLineIndex: symbolLineIndex,
-                                    symbolPrefix: symbolPrefix,
-                                    symbolIndentation: symbolIndentation
-                                })
-                            }
-                            insidePort = 0 // start of port descriptor
-                            indexLineIndex = -1
-                            symbolLineIndex = -1
-                            symbolPrefix = ""
-                            groupLineIndex = -1
-                        }
-
-                        if (insidePort < 2) { // finding a control input port port
-                            if (line.indexOf(':ControlPort') >= 0)
-                                insidePort++ // we need to find controlport and inputport
-                            if (line.indexOf(':InputPort') >= 0)
-                                insidePort++ // we need to find controlport and inputport
-
-                        } else {
-                            if (line.indexOf(':index') >= 0)
-                                indexLineIndex = index
-                            else if (line.indexOf(':symbol') >= 0)
-                            {
-                                // parse symbol name
-                                let lineSymbolName = line.trim().split(' ')[1]?.replaceAll('"', '').replace(',','').replaceAll(';', '')
-                                
-                                if (lineSymbolName == port.symbol) {
-                                    symbolLineIndex = index
-                                    symbolPrefix = line.split(':')[0]?.trim() ?? ""
-                                    symbolIndentation = line.replace(line.trim(), '')
+                            // search the plugin id (can't be on the first row)
+                            if (index > 0 && line.indexOf(':Plugin') >= 0) {
+                                if (pluginId == null) {
+                                    // if line starts with 'a' the id is on the previous line
+                                    if (line.trim().startsWith('a '))
+                                        pluginId = lines[index-1]
+                                    else
+                                        pluginId = line.split(' ')[0]?.trim() ?? null
+                                } else {
+                                    if (pluginId != null) {
+                                        lastPluginLineIndex = index - 1
+                                    }
                                 }
-                            } else if (line.indexOf(':group') >= 0) {
-                                groupLineIndex = index
+                            }
+                            if (lastPrefixIndex == -1 && line.indexOf('@prefix ') >= 0)
+                                lastPrefixIndex = index
+
+                            if (line.indexOf(':ControlPort') >= 0 || line.indexOf(':port') >= 0) {
+                                // ok new port found, add the config to the previous
+                                if (symbolLineIndex >= 0) {
+                                    patchPort({
+                                        port: port,
+                                        lines: lines,
+                                        indexLineIndex: indexLineIndex,
+                                        groupLineIndex: groupLineIndex,
+                                        symbolLineIndex: symbolLineIndex,
+                                        symbolPrefix: symbolPrefix,
+                                        symbolIndentation: symbolIndentation
+                                    })
+                                }
+                                if (line.indexOf(':ControlPort') >= 0)
+                                    insidePort = 1 // start of port descriptor this will catch array of ports [ ... ] , [ ...]
+                                else
+                                    insidePort = 0 // start of port descriptor
+                                indexLineIndex = -1
+                                symbolLineIndex = -1
+                                symbolPrefix = ""
+                                groupLineIndex = -1
                             }
 
+                            if (insidePort < 2) { // finding a control input port port
+                                if (line.indexOf(':ControlPort') >= 0)
+                                    insidePort++ // we need to find controlport and inputport
+                                if (line.indexOf(':InputPort') >= 0)
+                                    insidePort++ // we need to find controlport and inputport
+
+                            } else {
+                                if (line.indexOf(':index') >= 0)
+                                    indexLineIndex = index
+                                else if (line.indexOf(':symbol') >= 0)
+                                {
+                                    // parse symbol name
+                                    let lineSymbolName = line.trim().split(' ')[1]?.replaceAll('"', '').replace(',','').replaceAll(';', '')
+                                    
+                                    if (lineSymbolName == port.symbol) {
+                                        symbolLineIndex = index
+                                        symbolPrefix = line.split(':')[0]?.trim() ?? ""
+                                        symbolIndentation = line.replace(line.trim(), '')
+                                    }
+                                } else if (line.indexOf(':group') >= 0) {
+                                    groupLineIndex = index
+                                }
+
+                            }
+                        }
+                    }
+
+                    // if indexSymbolLine >= 0 we are handling the last port
+                    if (symbolLineIndex >= 0) {
+                        patchPort({
+                            port: port,
+                            lines: lines,
+                            indexLineIndex: indexLineIndex,
+                            groupLineIndex: groupLineIndex,
+                            symbolLineIndex: symbolLineIndex,
+                            symbolPrefix: symbolPrefix,
+                            symbolIndentation: symbolIndentation
+                        })
+                    }
+
+                    // add the groups
+                    if (usedGroupsId.length > 0) {
+                        lines.push('')
+
+                        for(let groupId of usedGroupsId) {
+                            const group = groups.value.find(item => item.id == groupId)
+
+                            if (group) {
+                                lines.push(`${pluginId}:${group.name}`)
+                                lines.push(`    a pg:InputGroup ;`)
+                                lines.push(`    pg:symbol "${group.name}" ;`)
+                                lines.push(`    pg:name "${group.label}" .`)
+                            }
                         }
                     }
                 }
-
-                // if indexSymbolLine >= 0 we are handling the last port
-                if (symbolLineIndex >= 0) {
-                    patchPort({
-                        port: port,
-                        lines: lines,
-                        indexLineIndex: indexLineIndex,
-                        groupLineIndex: groupLineIndex,
-                        symbolLineIndex: symbolLineIndex,
-                        symbolPrefix: symbolPrefix,
-                        symbolIndentation: symbolIndentation
-                    })
-                }
-
 
                 // insert group extension prefix
                 lastPrefixIndex++
                 lines.splice(lastPrefixIndex, 0, '@prefix pg: <http://lv2plug.in/ns/ext/port-groups#> .')
 
-                // add the groups
-                if (usedGroupsId.length > 0) {
-                    lines.push('')
-
-                    for(let groupId of usedGroupsId) {
-                        const group = groups.value.find(item => item.id == groupId)
-
-                        if (group) {
-                            lines.push(`${pluginId}:${group.name}`)
-                            lines.push(`    a pg:InputGroup ;`)
-                            lines.push(`    pg:symbol "${group.name}" ;`)
-                            lines.push(`    pg:name "${group.label}" .`)
-                        }
-                    }
-                }
                 // join the lines
                 patched_ttl = lines.join('\n')
                 patched_ttl += '\n'
